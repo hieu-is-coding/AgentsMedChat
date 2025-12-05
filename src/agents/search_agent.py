@@ -7,9 +7,8 @@ to retrieve current medical information and research using Gemini's native Googl
 
 import logging
 from typing import List, Dict, Optional, Generator
-from google.ai.generativelanguage_v1beta import GenerativeServiceClient
-from google.ai.generativelanguage_v1beta import GenerateContentRequest
-from google.ai.generativelanguage_v1beta.types import Content, Part, Tool as GenAITool
+from google import genai
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +25,19 @@ class SearchAgent:
         model_name: str = "gemini-2.0-flash",
         temperature: float = 0.7,
     ):
-        """
-        Initialize the Search Agent.
 
-        Args:
-            google_api_key: Google API key
-            model_name: Name of the Gemini model to use
-            temperature: Temperature for model generation
-        """
         self.google_api_key = google_api_key
         self.model_name = model_name
         self.temperature = temperature
 
-        # Initialize the GenerativeServiceClient
-        self.client = GenerativeServiceClient(client_options={"api_key": google_api_key})
+        # Initialize the Client
+        self.client = genai.Client(api_key=google_api_key)
         
         # Configure the tool
-        self.tool = GenAITool(google_search=GenAITool.GoogleSearch())
-
+        self.google_search_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+    
     def answer_question(self, question: str) -> dict:
         """
         Answer a question using web search.
@@ -57,16 +51,15 @@ class SearchAgent:
         try:
             logger.info(f"Processing question: {question}")
 
-            # Construct the request
-            content = Content(parts=[Part(text=question)])
-            request = GenerateContentRequest(
-                model=f"models/{self.model_name}",
-                contents=[content],
-                tools=[self.tool]
-            )
-
             # Generate content
-            response = self.client.generate_content(request)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=question,
+                config=types.GenerateContentConfig(
+                    tools=[self.google_search_tool],
+                    temperature=self.temperature
+                )
+            )
             
             # Extract answer
             answer = ""
@@ -75,15 +68,16 @@ class SearchAgent:
 
             # Extract grounding metadata
             search_results = []
-            if response.candidates and hasattr(response.candidates[0], 'grounding_metadata'):
+            if response.candidates and response.candidates[0].grounding_metadata:
                 gm = response.candidates[0].grounding_metadata
-                for chunk in gm.grounding_chunks:
-                    if chunk.web:
-                        search_results.append({
-                            "title": chunk.web.title,
-                            "link": chunk.web.uri,
-                            "snippet": "" # Snippet is not always available in chunks, sometimes in entry point or just implicit
-                        })
+                if gm.grounding_chunks:
+                    for chunk in gm.grounding_chunks:
+                        if chunk.web:
+                            search_results.append({
+                                "title": chunk.web.title,
+                                "link": chunk.web.uri,
+                                "snippet": "" # Snippet is not always available in chunks
+                            })
 
             return {
                 "question": question,
@@ -113,20 +107,18 @@ class SearchAgent:
         try:
             logger.info(f"Streaming answer for: {question}")
             
-            # Construct the request
-            content = Content(parts=[Part(text=question)])
-            request = GenerateContentRequest(
-                model=f"models/{self.model_name}",
-                contents=[content],
-                tools=[self.tool]
-            )
-            
             # Stream content
-            for chunk in self.client.stream_generate_content(request):
+            for chunk in self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=question,
+                config=types.GenerateContentConfig(
+                    tools=[self.google_search_tool],
+                    temperature=self.temperature
+                )
+            ):
                 if chunk.candidates and chunk.candidates[0].content.parts:
                     yield chunk.candidates[0].content.parts[0].text
                 
         except Exception as e:
             logger.error(f"Error streaming answer: {e}")
             raise
-

@@ -7,12 +7,14 @@ for the multi-agent chatbot system.
 
 import logging
 import os
+import time
 from typing import Dict, Optional, Generator
 from src.agents.orchestration_agent import OrchestrationAgent, AgentType
 from src.agents.rag_agent import RAGAgent
 from src.agents.search_agent import SearchAgent
 from src.agents.report_agent import ReportAgent
 from src.data.qdrant_pipeline import QdrantPipeline
+from src.memory.supabase_memory import SupabaseMemory
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +27,10 @@ class MedChat:
     def __init__(
         self,
         google_api_key: str,
-        qdrant_url: str = "http://localhost:6333",
+        qdrant_url: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         gemini_model: str = "gemini-2.0-flash",
-        collection_name: str = "rag-opensource",
+        collection_name: str = "MedChat-RAG",
         embedding_dimension: int = 3072,
     ):
         """
@@ -37,14 +39,14 @@ class MedChat:
         Args:
             google_api_key: Google API key for Gemini and Search
             qdrant_url: URL of Qdrant server
-            qdrant_api_key: API key for Qdrant Cloud (optional)
+            qdrant_api_key: API key for Qdrant Cloud
             gemini_model: Gemini model to use
             collection_name: Name of Qdrant collection
             embedding_dimension: Dimension of embeddings
         """
         self.google_api_key = google_api_key
-        self.qdrant_url = qdrant_url
-        self.qdrant_api_key = qdrant_api_key
+        self.qdrant_url = qdrant_url or os.getenv("SERVICE_URL_QDRANT")
+        self.qdrant_api_key = qdrant_api_key or os.getenv("SERVICE_PASSWORD_QDRANTAPIKEY")
         self.gemini_model = gemini_model
         self.collection_name = collection_name
         self.embedding_dimension = embedding_dimension
@@ -54,9 +56,8 @@ class MedChat:
         # Initialize Qdrant pipeline
         try:
             self.qdrant_pipeline = QdrantPipeline(
-                qdrant_url=qdrant_url,
-                qdrant_api_key=qdrant_api_key,
-                google_api_key=google_api_key,
+                qdrant_url=self.qdrant_url,
+                qdrant_api_key=self.qdrant_api_key,
                 collection_name=collection_name,
                 embedding_dimension=embedding_dimension,
             )
@@ -65,16 +66,25 @@ class MedChat:
             logger.error(f"Failed to initialize Qdrant pipeline: {e}")
             raise
 
+        # Initialize Supabase Memory
+        try:
+            self.supabase_memory = SupabaseMemory()
+            logger.info("Supabase memory initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Supabase memory: {e}")
+            self.supabase_memory = None
+
         # Initialize agents
         try:
             self.orchestration_agent = OrchestrationAgent(
                 google_api_key=google_api_key,
+                supabase_memory=self.supabase_memory,
                 model_name=gemini_model,
             )
             logger.info("Orchestration agent initialized")
 
             self.rag_agent = RAGAgent(
-                vector_store=self.qdrant_pipeline.vector_store,
+                qdrant_pipeline=self.qdrant_pipeline,
                 google_api_key=google_api_key,
                 model_name=gemini_model,
             )
@@ -98,75 +108,135 @@ class MedChat:
 
         logger.info("MedChat application initialized successfully")
 
-    def process_query(self, query: str) -> Dict:
+    def process_query(self, query: str, session_id: Optional[str] = None) -> Dict:
         """
         Process a user query through the multi-agent system.
 
         Args:
             query: User query
+            session_id: Session ID for memory
 
         Returns:
             Dictionary with response and metadata
         """
         try:
+            start_time = time.time()
             logger.info(f"Processing query: {query}")
 
             # Step 1: Route query using orchestration agent
-            routing_info = self.orchestration_agent.process_query(query)
+            routing_info = self.orchestration_agent.process_query(query, session_id=session_id)
             agent_type = AgentType(routing_info["agent_type"])
+            refined_query = routing_info["query_refinement"]
+            is_medical = routing_info.get("is_medical", True)
+            direct_response = routing_info.get("direct_response")
 
             logger.info(f"Routed to agent: {agent_type.value}")
 
-            # Step 2: Execute appropriate agent
-            if agent_type == AgentType.RAG:
-                result = self.rag_agent.answer_question(
-                    question=routing_info["query_refinement"]
+            # Handle non-medical or direct response cases
+            if direct_response:
+                logger.info("Returning direct response from orchestration agent")
+                end_time = time.time()
+                thinking_time = end_time - start_time
+                self.orchestration_agent.add_to_history(
+                    role="assistant",
+                    content=direct_response,
+                    agent_type="orchestration",
+                    session_id=session_id,
+                    thinking_time=thinking_time,
                 )
+                return {
+                    "question": query,
+                    "answer": direct_response,
+                    "routing_info": routing_info,
+                    "agent_type": "orchestration"
+                }
 
-            elif agent_type == AgentType.SEARCH:
-                result = self.search_agent.answer_question(
-                    question=routing_info["query_refinement"]
+            if not is_medical:
+                # Fallback if no direct response provided but marked as non-medical
+                msg = "I am a medical assistant and cannot answer non-medical questions. Please ask about health topics."
+                end_time = time.time()
+                thinking_time = end_time - start_time
+                self.orchestration_agent.add_to_history(
+                    role="assistant",
+                    content=msg,
+                    agent_type="orchestration",
+                    session_id=session_id,
+                    thinking_time=thinking_time,
                 )
+                return {
+                    "question": query,
+                    "answer": msg,
+                    "routing_info": routing_info,
+                    "agent_type": "orchestration"
+                }
 
-            elif agent_type == AgentType.REPORT:
-                # For reports, we might want to combine RAG and search
-                rag_result = self.rag_agent.answer_question(
-                    question=routing_info["query_refinement"]
+            # Step 2: Execute appropriate workflow
+            if agent_type == AgentType.GENERAL:
+                # For general queries, use simple RAG or direct answer
+                result = self.rag_agent.answer_question(question=refined_query)
+                
+            else:
+                # Smart Workflow for Medical Queries (RAG -> Sufficiency -> Search -> Report)
+                logger.info("Executing Smart Medical Workflow")
+                
+                # 1. RAG Retrieval
+                rag_result = self.rag_agent.answer_question(question=refined_query)
+                
+                # 2. Sufficiency Check
+                sufficiency = self.orchestration_agent.check_sufficiency(
+                    query=refined_query,
+                    context=rag_result.get("context_used", "")
                 )
-                search_result = self.search_agent.answer_question(
-                    question=routing_info["query_refinement"]
-                )
+                
+                search_result = None
+                if not sufficiency.is_sufficient:
+                    logger.info(f"RAG insufficient: {sufficiency.reasoning}. Performing search.")
+                    # 3. Search Fallback
+                    search_result = self.search_agent.answer_question(question=refined_query)
+                else:
+                    logger.info("RAG sufficient. Skipping search.")
 
-                report = self.report_agent.generate_summary_report(
-                    query=query,
-                    rag_results=rag_result,
-                    search_results=search_result,
-                )
-
+                # 4. Final Answer Generation (Report or Short Answer)
+                if routing_info.get("requires_report", False):
+                    logger.info("Generating comprehensive report")
+                    report = self.report_agent.generate_summary_report(
+                        query=query,
+                        rag_results=rag_result,
+                        search_results=search_result,
+                    )
+                else:
+                    logger.info("Generating short answer with citations")
+                    report = self.report_agent.generate_short_answer(
+                        query=query,
+                        rag_results=rag_result,
+                        search_results=search_result,
+                    )
+                
                 result = {
                     "question": query,
                     "answer": report,
-                    "agent_type": "report",
-                    "rag_results": rag_result,
-                    "search_results": search_result,
+                    "retrieved_documents": rag_result.get("retrieved_documents", []),
+                    "search_results": search_result.get("search_results", []) if search_result else [],
+                    "sufficiency_check": sufficiency.dict()
                 }
-
-            else:  # GENERAL
-                # Use RAG as default for general queries
-                result = self.rag_agent.answer_question(
-                    question=routing_info["query_refinement"]
-                )
 
             # Step 3: Add metadata
             result["routing_info"] = routing_info
             result["agent_type"] = agent_type.value
 
             # Add to conversation history
+            end_time = time.time()
+            thinking_time = end_time - start_time
+            
             self.orchestration_agent.add_to_history(
                 role="assistant",
                 content=result.get("answer", "")[:200],
                 agent_type=agent_type.value,
+                session_id=session_id,
+                thinking_time=thinking_time,
             )
+            
+            result["thinking_time"] = thinking_time
 
             logger.info("Query processed successfully")
             return result
@@ -175,12 +245,13 @@ class MedChat:
             logger.error(f"Error processing query: {e}")
             raise
 
-    def stream_query(self, query: str) -> Generator:
+    def stream_query(self, query: str, session_id: Optional[str] = None) -> Generator:
         """
         Stream response for a query (for real-time UI updates).
 
         Args:
             query: User query
+            session_id: Session ID
 
         Yields:
             Chunks of the response
@@ -189,7 +260,7 @@ class MedChat:
             logger.info(f"Streaming query: {query}")
 
             # Route query
-            routing_info = self.orchestration_agent.process_query(query)
+            routing_info = self.orchestration_agent.process_query(query, session_id=session_id)
             agent_type = AgentType(routing_info["agent_type"])
 
             # Stream from appropriate agent
@@ -238,10 +309,22 @@ class MedChat:
             logger.error(f"Error getting vector store info: {e}")
             raise
 
-    def clear_conversation_history(self) -> None:
+    def clear_conversation_history(self, session_id: Optional[str] = None) -> None:
         """Clear the conversation history."""
-        self.orchestration_agent.clear_history()
+        self.orchestration_agent.clear_history(session_id=session_id)
         logger.info("Conversation history cleared")
+
+    def get_all_sessions(self) -> list[str]:
+        """Retrieve all available session IDs."""
+        if self.supabase_memory:
+            return self.supabase_memory.get_all_sessions()
+        return []
+
+    def get_session_history(self, session_id: str) -> list[dict]:
+        """Retrieve history for a specific session."""
+        if self.supabase_memory:
+            return self.supabase_memory.get_history(session_id=session_id)
+        return []
 
     def health_check(self) -> Dict:
         """
@@ -256,6 +339,7 @@ class MedChat:
             "rag_agent": False,
             "search_agent": False,
             "report_agent": False,
+            "supabase_memory": False,
         }
 
         try:
@@ -270,5 +354,8 @@ class MedChat:
         health_status["rag_agent"] = self.rag_agent is not None
         health_status["search_agent"] = self.search_agent is not None
         health_status["report_agent"] = self.report_agent is not None
+        
+        # Check Supabase
+        health_status["supabase_memory"] = self.supabase_memory is not None
 
         return health_status

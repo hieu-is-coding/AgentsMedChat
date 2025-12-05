@@ -32,7 +32,7 @@ class ReportAgent:
         Args:
             google_api_key: Google API key for Gemini
             model_name: Name of the Gemini model to use
-            temperature: Temperature for model generation
+
         """
         self.google_api_key = google_api_key
         self.model_name = model_name
@@ -42,7 +42,7 @@ class ReportAgent:
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
-            google_api_key=google_api_key,
+            # google_api_key=google_api_key, # Rely on env var
         )
 
         # Define the report generation prompt
@@ -57,21 +57,74 @@ Information to include:
 Sources and References:
 {sources}
 
-Please generate a professional medical report with the following structure:
-1. Executive Summary
-2. Introduction
-3. Main Content (organized by relevant subtopics)
-4. Key Findings
-5. Clinical Implications
-6. Recommendations
-7. References
+**Instructions:**
 
-Ensure the report is accurate, well-cited, and suitable for medical students."""
+1. **Style and Structure:**
+   * Use bullet points (*) to structure lists, steps, or analysis of complex information.
+   * Use **bold** to emphasize key terms, diagnoses, and important concepts.
+   * Write clearly and professionally, using your best judgment on length and detail based on the complexity of the question.
+   * Each answer must end with a clear summary or conclusion.
+
+2. **Special Handling:**
+   * **DO NOT diagnose the patient.** Instead, guide the user through a general procedure that a physician might use. Combine theory with illustrative examples (e.g., "For a condition like this, a typical diagnostic procedure includes: 1. Patient history, 2. Physical examination, 3. Specific tests such as...").
+   * **Health record:** Provide general medical information about the findings. (e.g., "This presentation is often associated with...").
+
+3. **Final Format (Markdown):**
+   * Structure your summary answer.
+   * **Citation and Linking:** Use the following format to cite evidence and link to references (All key answers need to have the citation):
+     * Argument will look like: Arguments/Evidence sentences in answer <sup>[[1]](#ref1)</sup>
+     * References will look like: <a id="ref1">1.</a> Reference in APA 7 style for sentences above
+   * Add a **References** section: list all sources in APA version 7 format in order (Separate each by spacing or newline).
+   * **Final output:** Your final output to the user should be just the language same as user input. Do not add any other text.
+
+Please generate the report following these strict guidelines."""
+        )
+
+        # Define the short answer prompt
+        self.short_answer_prompt_template = ChatPromptTemplate.from_template(
+            """You are a medical assistant providing a concise and accurate answer.
+
+Topic: {topic}
+
+Information to include:
+{information}
+
+Sources and References:
+{sources}
+
+**Instructions:**
+
+1. **Style:**
+   * Be concise and direct. Do NOT generate a full report with sections.
+   * Focus on answering the specific question asked.
+   * Use **bold** for key terms.
+
+2. **Safety:**
+   * **DO NOT diagnose.** Provide general medical information.
+
+3. **Citations (CRITICAL):**
+   * You MUST cite your sources for every factual claim.
+   * Use the following format:
+     * Sentence with claim <sup>[[1]](#ref1)</sup>
+     * References section at the bottom: <a id="ref1">1.</a> Reference details
+   * Add a **References** section at the very end.
+
+4. **Final output:**
+   * Just the answer and references. No conversational filler.
+
+Please generate the short answer following these guidelines."""
         )
 
         # Create the report chain
         self.chain = (
             self.prompt_template
+            | self.llm
+            | StrOutputParser()
+        )
+
+        # Create the short answer chain
+        self.short_answer_chain = (
+            self.short_answer_prompt_template
             | self.llm
             | StrOutputParser()
         )
@@ -150,6 +203,91 @@ Ensure the report is accurate, well-cited, and suitable for medical students."""
             logger.error(f"Error streaming report: {e}")
             raise
 
+    def generate_short_answer(
+        self,
+        query: str,
+        rag_results: Optional[Dict] = None,
+        search_results: Optional[Dict] = None,
+    ) -> str:
+        """
+        Generate a short answer combining RAG and search results.
+
+        Args:
+            query: Original user query
+            rag_results: Results from RAG agent
+            search_results: Results from Search agent
+
+        Returns:
+            Generated short answer
+        """
+        try:
+            logger.info(f"Generating short answer for query: {query}")
+
+            # Compile information from different sources
+            information_parts = []
+
+            if rag_results:
+                information_parts.append(
+                    f"Knowledge Base Information:\n{rag_results.get('answer', '')}"
+                )
+
+            if search_results:
+                information_parts.append(
+                    f"Recent Research and News:\n{search_results.get('answer', '')}"
+                )
+
+            information = "\n\n".join(information_parts)
+
+            # Compile sources with rich metadata
+            sources = []
+            if rag_results:
+                for doc in rag_results.get("retrieved_documents", []):
+                    meta = doc.get("metadata", {})
+                    
+                    # Try to construct a rich citation
+                    book = meta.get("book_name")
+                    author = meta.get("author")
+                    year = meta.get("publish_year")
+                    page = meta.get("page_number")
+                    
+                    if book:
+                        citation = f"{book}"
+                        if year:
+                            citation += f" ({year})"
+                        if author:
+                            citation += f", by {author}"
+                        if page:
+                            citation += f", p. {page}"
+                    else:
+                        # Fallback to source field or unknown
+                        citation = meta.get("source", "Unknown Source")
+                        
+                    if citation not in sources:
+                        sources.append(citation)
+
+            if search_results:
+                for result in search_results.get("search_results", []):
+                    title = result.get("title", "Unknown Title")
+                    link = result.get("link", "Unknown Link")
+                    citation = f"{title} - {link}"
+                    if citation not in sources:
+                        sources.append(citation)
+
+            sources_text = "\n".join(sources) if sources else "No sources provided"
+
+            # Generate short answer
+            answer = self.short_answer_chain.invoke({
+                "topic": query,
+                "information": information,
+                "sources": sources_text,
+            })
+
+            return answer
+
+        except Exception as e:
+            logger.error(f"Error generating short answer: {e}")
+            raise
+
     def generate_summary_report(
         self,
         query: str,
@@ -185,19 +323,40 @@ Ensure the report is accurate, well-cited, and suitable for medical students."""
 
             information = "\n\n".join(information_parts)
 
-            # Compile sources
+            # Compile sources with rich metadata
             sources = []
             if rag_results:
                 for doc in rag_results.get("retrieved_documents", []):
-                    source = doc.get("metadata", {}).get("source", "Unknown")
-                    if source not in sources:
-                        sources.append(source)
+                    meta = doc.get("metadata", {})
+                    
+                    # Try to construct a rich citation
+                    book = meta.get("book_name")
+                    author = meta.get("author")
+                    year = meta.get("publish_year")
+                    page = meta.get("page_number")
+                    
+                    if book:
+                        citation = f"{book}"
+                        if year:
+                            citation += f" ({year})"
+                        if author:
+                            citation += f", by {author}"
+                        if page:
+                            citation += f", p. {page}"
+                    else:
+                        # Fallback to source field or unknown
+                        citation = meta.get("source", "Unknown Source")
+                        
+                    if citation not in sources:
+                        sources.append(citation)
 
             if search_results:
                 for result in search_results.get("search_results", []):
-                    link = result.get("link", "Unknown")
-                    if link not in sources:
-                        sources.append(link)
+                    title = result.get("title", "Unknown Title")
+                    link = result.get("link", "Unknown Link")
+                    citation = f"{title} - {link}"
+                    if citation not in sources:
+                        sources.append(citation)
 
             # Generate report
             report = self.generate_report(
@@ -211,6 +370,7 @@ Ensure the report is accurate, well-cited, and suitable for medical students."""
         except Exception as e:
             logger.error(f"Error generating summary report: {e}")
             raise
+
 
     def format_report_with_metadata(
         self,

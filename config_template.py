@@ -13,13 +13,13 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 # Qdrant Configuration
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+QDRANT_URL = os.getenv("SERVICE_URL_QDRANT", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("SERVICE_PASSWORD_QDRANTAPIKEY", "")
 
 # Gemini Model Configuration
 GEMINI_MODEL = "gemini-2.0-flash"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
-EMBEDDING_DIMENSION = 3072
+EMBEDDING_DIMENSION = 1536
 
 # Application Configuration
 APP_NAME = "MedChat"
@@ -27,7 +27,7 @@ DEBUG = False
 LOG_LEVEL = "INFO"
 
 # Qdrant Collection Configuration
-MEDICAL_COLLECTION_NAME = "rag-opensource"
+MEDICAL_COLLECTION_NAME = "MedChat-RAG"
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
 

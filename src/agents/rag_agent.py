@@ -23,7 +23,7 @@ class RAGAgent:
 
     def __init__(
         self,
-        vector_store,
+        qdrant_pipeline,
         google_api_key: str,
         model_name: str = "gemini-2.0-flash",
         temperature: float = 0.7,
@@ -33,13 +33,13 @@ class RAGAgent:
         Initialize the RAG Agent.
 
         Args:
-            vector_store: QdrantVectorStore instance
+            qdrant_pipeline: QdrantPipeline instance
             google_api_key: Google API key for Gemini
             model_name: Name of the Gemini model to use
             temperature: Temperature for model generation
             top_k: Number of documents to retrieve
         """
-        self.vector_store = vector_store
+        self.qdrant_pipeline = qdrant_pipeline
         self.google_api_key = google_api_key
         self.model_name = model_name
         self.temperature = temperature
@@ -49,7 +49,7 @@ class RAGAgent:
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
-            google_api_key=google_api_key,
+            # google_api_key=google_api_key, # Rely on env var
         )
 
         # Define the RAG prompt template
@@ -82,7 +82,7 @@ indicate that and provide general medical knowledge if appropriate. Always cite 
         k: Optional[int] = None,
     ) -> List[Tuple[Document, float]]:
         """
-        Retrieve relevant documents from the vector store.
+        Retrieve relevant documents from the vector store using dense search.
 
         Args:
             query: User query
@@ -95,7 +95,8 @@ indicate that and provide general medical knowledge if appropriate. Always cite 
 
         try:
             logger.info(f"Retrieving {k} documents for query: {query}")
-            results = self.vector_store.similarity_search_with_score(query=query, k=k)
+            # Use the new search method (formerly hybrid_search)
+            results = self.qdrant_pipeline.search(query=query, k=k)
             logger.info(f"Retrieved {len(results)} documents")
             return results
 
@@ -108,7 +109,7 @@ indicate that and provide general medical knowledge if appropriate. Always cite 
         retrieved_docs: List[Tuple[Document, float]],
     ) -> str:
         """
-        Format retrieved documents into context string.
+        Format retrieved documents into context string with rich metadata.
 
         Args:
             retrieved_docs: List of (Document, score) tuples
@@ -119,16 +120,25 @@ indicate that and provide general medical knowledge if appropriate. Always cite 
         context_parts = []
 
         for i, (doc, score) in enumerate(retrieved_docs, 1):
-            source = doc.metadata.get("source", "Unknown")
-            content = doc.page_content[:500]  # Limit content length
+            # Extract metadata
+            meta = doc.metadata
+            book = meta.get("book_name", "Unknown Book")
+            author = meta.get("author", "Unknown Author")
+            year = meta.get("publish_year", "N/A")
+            page = meta.get("page_number", "N/A")
+            
+            content = doc.page_content
+            
+            # Create a citation header
+            citation = f"{book} ({year}), by {author}, p. {page}"
 
             context_parts.append(
-                f"Document {i} (Relevance: {score:.2f}):\n"
-                f"Source: {source}\n"
-                f"Content: {content}...\n"
+                f"Document {i} (Relevance: {score:.4f}):\n"
+                f"Source: {citation}\n"
+                f"Content: {content}\n"
             )
 
-        return "\n".join(context_parts)
+        return "\n\n".join(context_parts)
 
     def answer_question(
         self,
@@ -214,3 +224,4 @@ indicate that and provide general medical knowledge if appropriate. Always cite 
         except Exception as e:
             logger.error(f"Error streaming answer: {e}")
             raise
+

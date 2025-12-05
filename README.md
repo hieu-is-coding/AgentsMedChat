@@ -1,152 +1,165 @@
-# MedChat: Multi-Agent Chatbot for Medical Students
+# MedChat API: Multi-Agent Medical AI Backend
 
-A sophisticated multi-agent AI system designed to assist medical students with comprehensive medical information, current research, and clinical guidance. MedChat leverages **Google Gemini 2.0**, **LangChain**, **Qdrant**, and **Streamlit** to provide intelligent, context-aware responses.
+A sophisticated multi-agent AI system designed to assist medical students with comprehensive medical information, current research, and clinical guidance. MedChat leverages **Google Gemini 2.0**, **LangChain**, **Qdrant**, **Supabase**, and **FastAPI** to provide intelligent, context-aware responses.
 
-## 🚀 Installation
-
-### 1. Clone and Setup
-
-```bash
-cd AgentsMedChat
-python3.11 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-Create a `.env` file based on `config_template.py`:
-
-```python
-# Google Gemini API Configuration
-GOOGLE_API_KEY=your_google_api_key_here
-
-# Qdrant Configuration
-QDRANT_URL=your_qdrant_url_here
-QDRANT_API_KEY=your_qdrant_api_key_here
-
-# Model Configuration
-GEMINI_MODEL=gemini-2.0-flash
-EMBEDDING_MODEL=models/gemini-embedding-001
-```
+This repository hosts the **API Backend**. It is designed to be deployed via Docker and consumed by any frontend application (Web, Mobile, etc.).
 
 ## 🏗️ Architecture
 
+The system consists of a multi-agent backend exposed via a REST API, with persistent memory and vector search capabilities.
+
+```mermaid
+graph TD
+    User[User / Frontend] -->|HTTP Request| API[FastAPI Server]
+    API --> Orch[Orchestration Agent]
+    
+    subgraph "Agent System"
+        Orch -->|Route| RAG[RAG Agent]
+        Orch -->|Route| Search[Search Agent]
+        Orch -->|Route| Report[Report Agent]
+        
+        RAG <-->|Retrieve| Qdrant[(Qdrant Vector DB)]
+        Search <-->|Query| Google[Google Search API]
+        Report -->|Synthesize| RAG & Search
+    end
+    
+    subgraph "Memory & Storage"
+        Orch <-->|Read/Write| Supabase[(Supabase DB)]
+    end
 ```
-User Query
-    ↓
-[Orchestration Agent] → Routes to appropriate agent
-    ↓
-    ├─→ [RAG Agent] → Qdrant Vector Store
-    │       ↓
-    │   Retrieved Documents
-    │
-    ├─→ [Search Agent] → Google Search API
-    │       ↓
-    │   Web Results
-    │
-    └─→ [Report Agent] → Generates Report
-            ↓
-        Formatted Response
-            ↓
-        Streamlit UI
+
+## 🚀 Getting Started (Docker)
+
+The recommended way to run MedChat is using Docker. This ensures all dependencies are correctly installed and isolated.
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+- A `.env` file with your API keys (see Configuration below).
+
+### 1. Build the Image
+```bash
+docker build -t medchat-api .
 ```
 
-## 📋 Prerequisites
-
-- Python 3.11+
-- Google API Key (for Gemini and Search)
-- Google Custom Search Engine ID
-- Qdrant instance (local, Docker, or cloud)
-
-### 3. Set Up Qdrant
-
-#### Qdrant Cloud
-Sign up at [Qdrant Cloud](https://cloud.qdrant.io/) and get your API key.
-
-### 4. Load Medical Documents
+### 2. Run the Container
+Run the container, passing your environment variables. We use Google DNS (`8.8.8.8`) to ensure external services like Qdrant are resolvable.
 
 ```bash
-python setup_qdrant.py
+docker run -d -p 8000:8000 --env-file .env --dns 8.8.8.8 --name medchat-container medchat-api
 ```
 
-This script will:
-- Initialize Qdrant collection
-- Load sample medical documents
-- Test similarity search functionality
+The API will be available at **[http://localhost:8000](http://localhost:8000)**.
 
-## 💻 Usage
+- **Interactive Docs (Swagger UI)**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
 
-### Run the Streamlit Application
+---
 
-```bash
-streamlit run app.py
+## 🛠️ Local Development (Python)
+
+If you prefer running locally without Docker:
+
+1.  **Clone and Setup**:
+    ```bash
+    python -m venv venv
+    # Windows
+    venv\Scripts\activate
+    # Linux/Mac
+    source venv/bin/activate
+    
+    pip install -r requirements.txt
+    ```
+
+2.  **Run Server**:
+    ```bash
+    uvicorn api:app --reload
+    ```
+
+---
+
+## 🔌 API Documentation
+
+### 1. Chat Endpoint
+**POST** `/chat`
+
+Process a user query through the multi-agent system.
+
+**Request Body:**
+```json
+{
+  "query": "What are the symptoms of diabetes?",
+  "session_id": "optional-uuid-string"
+}
 ```
 
-The application will be available at `http://localhost:8501`
-
-### Run Tests
-
-```bash
-python test_medchat.py
+**Response:**
+```json
+{
+  "answer": "The symptoms of diabetes include...",
+  "session_id": "uuid-string",
+  "agent_type": "rag",
+  "retrieved_documents": [
+    {
+      "content": "Diabetes mellitus is a chronic disease...",
+      "metadata": {"source": "Harrison's Principles", "page": 42},
+      "score": 0.85
+    }
+  ],
+  "search_results": [],
+  "thinking_time": 1.25
+}
 ```
 
-This will test:
-- RAG Agent functionality
-- Search Agent functionality
-- Orchestration Agent routing
-- Multi-agent workflow
-- System health checks
+### 2. Health Check
+**GET** `/health`
 
+Check the status of all system components (Qdrant, Supabase, Agents).
 
-## 📁 Project Structure
-
-```
-MedChat/
-├── src/
-│   ├── agents/
-│   │   ├── orchestration_agent.py    # Query routing and decision-making
-│   │   ├── rag_agent.py              # Knowledge base retrieval
-│   │   ├── search_agent.py           # Web search integration
-│   │   └── report_agent.py           # Report generation
-│   ├── data/
-│   │   └── qdrant_pipeline.py        # Vector database operations
-│   ├── utils/
-│   │   └── document_processor.py     # Document loading and chunking
-│   └── medchat.py                    # Main application coordinator
-├── app.py                             # Streamlit UI
-├── setup_qdrant.py                   # Qdrant initialization script
-├── test_medchat.py                   # System testing script
-├── config_template.py                # Configuration template
-├── requirements.txt                  # Python dependencies
-├── ARCHITECTURE.md                   # Detailed architecture documentation
-└── README.md                         # This file
+**Response:**
+```json
+{
+  "status": "healthy",
+  "components": {
+    "qdrant": true,
+    "orchestration_agent": true,
+    "rag_agent": true,
+    "search_agent": true,
+    "report_agent": true,
+    "supabase_memory": true
+  }
+}
 ```
 
-## 🤖 Agent Descriptions
+### 3. Clear History
+**DELETE** `/history/{session_id}`
 
-### Orchestration Agent
-Routes queries based on intent analysis:
-- **RAG**: Knowledge base questions
-- **Search**: Current information requests
-- **Report**: Formal report generation
-- **General**: Fallback for unclear queries
+Clear the conversation memory for a specific session.
 
-### RAG Agent
-Retrieves and augments responses with knowledge base:
-- Similarity search in Qdrant
-- Context-aware response generation
-- Source citation and tracking
+---
 
-### Search Agent
-Performs web searches for current information:
-- Google Search API integration
-- Result synthesis and summarization
-- Source attribution
+## 🔑 Configuration
 
-### Report Agent
-Generates comprehensive medical reports:
-- Structured report generation
-- Multi-source information synthesis
-- Professional formatting
-- File export capabilities
+Create a `.env` file in the root directory:
+
+```ini
+# Google Gemini API
+GOOGLE_API_KEY="your_google_api_key"
+
+# Qdrant Vector DB
+SERVICE_URL_QDRANT="your_qdrant_url"
+SERVICE_PASSWORD_QDRANTAPIKEY="your_qdrant_api_key"
+
+# Supabase (Memory)
+SUPABASE_URL="your_supabase_url"
+SUPABASE_SERVICE_ROLE_KEY="your_supabase_service_role_key"
+
+# App Config
+LOG_LEVEL="INFO"
+```
+
+## 🤖 Agent Capabilities
+
+-   **Orchestration Agent**: Analyzes queries, manages conversation history (via Supabase), and routes tasks to specialized agents.
+-   **RAG Agent**: Retrieves medical knowledge from the Qdrant vector database (Medical Textbooks).
+-   **Search Agent**: Fetches real-time information using Google Search (News, Recent Studies).
+-   **Report Agent**: Synthesizes information from multiple sources into comprehensive reports when requested.
