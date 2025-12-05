@@ -19,8 +19,10 @@ graph TD
         Orch -->|Route| Report[Report Agent]
         
         RAG <-->|Retrieve| Qdrant[(Qdrant Vector DB)]
+        RAG -->|Synthesize| Orch & Search
         Search <-->|Query| Google[Google Search API]
-        Report -->|Synthesize| RAG & Search
+        Search & RAG -->|Synthesize| Report
+        Report -->|Synthesize| Orch
     end
     
     subgraph "Memory & Storage"

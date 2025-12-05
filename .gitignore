@@ -48,6 +48,3 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
-# Local Tests & Scripts
-reproduce_crash.py
-test_api_local.py
