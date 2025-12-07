@@ -31,7 +31,7 @@ class MedChat:
         qdrant_api_key: Optional[str] = None,
         gemini_model: str = "gemini-2.0-flash",
         collection_name: str = "MedChat-RAG",
-        embedding_dimension: int = 3072,
+        embedding_dimension: int = 1536,
     ):
         """
         Initialize MedChat application.
@@ -183,18 +183,20 @@ class MedChat:
                 rag_result = self.rag_agent.answer_question(question=refined_query)
                 
                 # 2. Sufficiency Check
-                sufficiency = self.orchestration_agent.check_sufficiency(
-                    query=refined_query,
-                    context=rag_result.get("context_used", "")
-                )
+                # sufficiency = self.orchestration_agent.check_sufficiency(
+                #     query=refined_query,
+                #     context=rag_result.get("context_used", "")
+                # )
                 
                 search_result = None
-                if not sufficiency.is_sufficient:
-                    logger.info(f"RAG insufficient: {sufficiency.reasoning}. Performing search.")
-                    # 3. Search Fallback
-                    search_result = self.search_agent.answer_question(question=refined_query)
-                else:
-                    logger.info("RAG sufficient. Skipping search.")
+                # if not sufficiency.is_sufficient:
+                #     logger.info(f"RAG insufficient: {sufficiency.reasoning}. Performing search.")
+                #     # 3. Search Fallback
+                #     search_result = self.search_agent.answer_question(question=refined_query)
+                # else:
+                #     logger.info("RAG sufficient. Skipping search.")
+
+
 
                 # 4. Final Answer Generation (Report or Short Answer)
                 if routing_info.get("requires_report", False):
