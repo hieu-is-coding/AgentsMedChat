@@ -183,6 +183,7 @@ class MedChat:
                 rag_result = self.rag_agent.answer_question(question=refined_query)
                 
                 # 2. Sufficiency Check
+                sufficiency = None
                 # sufficiency = self.orchestration_agent.check_sufficiency(
                 #     query=refined_query,
                 #     context=rag_result.get("context_used", "")
@@ -219,7 +220,7 @@ class MedChat:
                     "answer": report,
                     "retrieved_documents": rag_result.get("retrieved_documents", []),
                     "search_results": search_result.get("search_results", []) if search_result else [],
-                    "sufficiency_check": sufficiency.dict()
+                    "sufficiency_check": sufficiency.dict() if sufficiency else None
                 }
 
             # Step 3: Add metadata
