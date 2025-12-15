@@ -22,7 +22,7 @@ class SearchAgent:
     def __init__(
         self,
         google_api_key: str,
-        model_name: str = "gemini-2.0-flash",
+        model_name: str = "gemini-2.5-flash-lite",
         temperature: float = 0.7,
     ):
 

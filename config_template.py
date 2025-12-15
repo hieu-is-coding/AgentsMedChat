@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Google Gemini API Configuration
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Qdrant Configuration
-QDRANT_URL = os.getenv("SERVICE_URL_QDRANT", "http://localhost:6333")
-QDRANT_API_KEY = os.getenv("SERVICE_PASSWORD_QDRANTAPIKEY", "")
+QDRANT_URL = os.getenv("SERVICE_URL_QDRANT")
+QDRANT_API_KEY = os.getenv("SERVICE_PASSWORD_QDRANTAPIKEY")
 
 # Gemini Model Configuration
 GEMINI_MODEL = "gemini-2.0-flash"
