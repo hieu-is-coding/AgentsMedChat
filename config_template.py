@@ -17,7 +17,7 @@ QDRANT_URL = os.getenv("SERVICE_URL_QDRANT")
 QDRANT_API_KEY = os.getenv("SERVICE_PASSWORD_QDRANTAPIKEY")
 
 # Gemini Model Configuration
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 EMBEDDING_DIMENSION = 1536
 
